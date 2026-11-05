@@ -1,0 +1,91 @@
+{
+  "name": "agent-kitchen",
+  "displayName": "Agent Kitchen",
+  "description": "A live pixel-art restaurant kitchen where your Claude Code and GitHub Copilot sessions are chefs cooking orders.",
+  "version": "1.0.0",
+  "publisher": "BeenTech",
+  "license": "MIT",
+  "private": true,
+  "icon": "media/icon.png",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/mubeenkhann97/agent-kitchen"
+  },
+  "bugs": {
+    "url": "https://github.com/mubeenkhann97/agent-kitchen/issues"
+  },
+  "homepage": "https://github.com/mubeenkhann97/agent-kitchen#readme",
+  "categories": [
+    "Visualization",
+    "Other"
+  ],
+  "keywords": [
+    "claude",
+    "claude code",
+    "copilot",
+    "ai agents",
+    "pixel art",
+    "dashboard",
+    "sessions"
+  ],
+  "galleryBanner": {
+    "color": "#1d1f2b",
+    "theme": "dark"
+  },
+  "pricing": "Free",
+  "engines": {
+    "vscode": "^1.90.0",
+    "node": ">=20"
+  },
+  "main": "./extension.js",
+  "activationEvents": [
+    "onStartupFinished"
+  ],
+  "contributes": {
+    "commands": [
+      {
+        "command": "agentKitchen.open",
+        "title": "Open Kitchen",
+        "category": "Agent Kitchen",
+        "icon": "$(flame)"
+      },
+      {
+        "command": "agentKitchen.openDemo",
+        "title": "Open Demo Service",
+        "category": "Agent Kitchen"
+      }
+    ],
+    "configuration": {
+      "title": "Agent Kitchen",
+      "properties": {
+        "agentKitchen.startOnLaunch": {
+          "type": "boolean",
+          "default": false,
+          "description": "Start watching sessions when VS Code starts, so the status bar shows active chefs even before you open the kitchen."
+        },
+        "agentKitchen.notifyOnAttention": {
+          "type": "boolean",
+          "default": true,
+          "description": "Show a notification when a chef needs your attention and the kitchen tab is not visible."
+        },
+        "agentKitchen.claudeProjectsDir": {
+          "type": "string",
+          "default": "",
+          "description": "Override the Claude Code transcripts folder (default: ~/.claude/projects). Reopen the kitchen after changing."
+        },
+        "agentKitchen.copilotSessionDir": {
+          "type": "string",
+          "default": "",
+          "description": "Override the GitHub Copilot session-state folder (default: ~/.copilot/session-state). Reopen the kitchen after changing."
+        }
+      }
+    }
+  },
+  "scripts": {
+    "start": "node server.js",
+    "demo": "node server.js --demo",
+    "test": "node --test \"test/*.test.js\"",
+    "package": "npx --yes @vscode/vsce package",
+    "icon": "node tools/make-icon.js"
+  }
+}

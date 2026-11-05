@@ -1,0 +1,10 @@
+test/**
+tools/**
+artifacts/**
+.github/**
+.vscode/**
+server.js
+hook.js
+*.vsix
+**/*.png.tmp
+.gitignore
