@@ -2,7 +2,7 @@
   "name": "agent-kitchen",
   "displayName": "Agent Kitchen",
   "description": "A live pixel-art restaurant kitchen where your Claude Code and GitHub Copilot sessions are chefs cooking orders.",
-  "version": "1.0.1",
+  "version": "1.0.2",
   "publisher": "BeenTech",
   "license": "MIT",
   "private": true,
@@ -82,6 +82,11 @@
           "type": "string",
           "default": "",
           "description": "Override the GitHub Copilot session-state folder (default: ~/.copilot/session-state). Reopen the kitchen after changing."
+        },
+        "agentKitchen.includeVSCodeChat": {
+          "type": "boolean",
+          "default": true,
+          "description": "Show GitHub Copilot Chat sessions from this VS Code (Chat view and agent mode) as chefs. Reopen the kitchen after changing."
         }
       }
     }

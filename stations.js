@@ -24,12 +24,28 @@ const TOOL_STATIONS = {
 const SUBAGENT_TOOLS = new Set(['task', 'agent']);
 const ATTENTION_TOOLS = new Set(['askuserquestion', 'ask_user']);
 
+// VS Code Copilot Chat tool ids -> the equivalent kitchen tool (lower-case keys).
+const VSCODE_TOOL_ALIASES = {
+  copilot_readfile: 'read', copilot_listdirectory: 'ls', copilot_findtextinfiles: 'grep', copilot_findfiles: 'glob',
+  copilot_searchcodebase: 'grep', copilot_viewimage: 'read', copilot_geterrors: 'read', copilot_memory: 'read',
+  copilot_createfile: 'create', copilot_createdirectory: 'create', copilot_replacestring: 'edit',
+  copilot_multireplacestring: 'edit', copilot_applypatch: 'edit', copilot_insertedit: 'edit', copilot_editnotebook: 'edit',
+  run_in_terminal: 'bash', send_to_terminal: 'bash', get_terminal_output: 'bashoutput', kill_terminal: 'killshell',
+  run_task: 'bash', create_and_run_task: 'bash', copilot_fetchwebpage: 'web_fetch', vscode_fetchwebpage_internal: 'web_fetch',
+  manage_todo_list: 'todowrite', runsubagent: 'task', vscode_askquestions: 'ask_user', tool_search: 'toolsearch',
+};
+
+function vscodeToolAlias(toolId) {
+  if (typeof toolId !== 'string') return 'tool';
+  return VSCODE_TOOL_ALIASES[toolId.toLowerCase()] || toolId;
+}
+
 function stationFor(tool) {
   if (!tool || typeof tool !== 'string') return 'prep';
   const t = tool.toLowerCase();
   if (TOOL_STATIONS[t]) return TOOL_STATIONS[t];
   if (/(^|_)(todo|plan)/.test(t)) return 'rail';
-  if (t.startsWith('mcp__') || t.startsWith('github-mcp-server-')) return 'market';
+  if (t.startsWith('mcp__') || t.startsWith('mcp_') || t.startsWith('github-mcp-server-') || t.startsWith('github_')) return 'market';
   // Copilot MCP tools are named "<server>-<tool>".
   if (t.includes('-')) return 'market';
   return 'prep';
@@ -62,7 +78,8 @@ function hostOf(url) {
 
 function mcpServer(tool) {
   if (tool.startsWith('mcp__')) return tool.split('__')[1] || 'supplier';
-  if (tool.startsWith('github-mcp-server-')) return 'github';
+  if (tool.startsWith('github-mcp-server-') || tool.startsWith('github_')) return 'github';
+  if (tool.startsWith('mcp_')) return tool.split('_')[1] || 'supplier';
   return tool.split('-')[0];
 }
 
@@ -108,4 +125,5 @@ function describeAction(tool, detail) {
 
 module.exports = {
   STATIONS, TOOL_STATIONS, stationFor, isSubagentTool, isAttentionTool, summarize, describeAction, clean, baseName,
+  vscodeToolAlias,
 };

@@ -75,7 +75,20 @@
     .map(([x, row]) => (row === 'T' ? { x, y: 10, face: 'down' } : { x, y: 13, face: 'up' }));
   const WAITER_PASS = [];
   for (let y = 4; y <= 11; y++) WAITER_PASS.push({ x: DIV + 1, y, face: 'left' });
-  const TABLE_SPOTS = TABLES.map(([tx, ty]) => ({ x: tx - 1, y: ty + 1, face: 'right', table: { x: tx, y: ty } }));
+  // Each seat owns half a table: seats 0-5 the left half, 6-11 the right half.
+  function tableFor(seat) {
+    if (seat === null || seat === undefined || seat < 0) return null;
+    const index = seat % TABLES.length;
+    const [tx, ty] = TABLES[index];
+    const right = seat >= TABLES.length;
+    return {
+      index, right, tx, ty,
+      spot: right ? { x: tx + 2, y: ty + 1, face: 'left' } : { x: tx - 1, y: ty + 1, face: 'right' },
+      px: tx * T + (right ? 17 : 3),
+      py: ty * T + 3,
+    };
+  }
+  const PLATE_OFFSETS = [[1, 2], [1, 10], [3, 17]];
   const STATION_LABELS = [['PANTRY', 4.5, 1.25], ['TICKETS', 9, 1.25], ['STOVE', 15, 1.25], ['MARKET', 1.7, 3.4], ['CUTTING BOARDS', 10, 9.45], ['PREP / HOME', 10, 14.7], ['PASS', DIV + 0.5, 3.45], ['DINING ROOM', 24.5, 1.25], ['WAITING', 27.5, 16.6]];
 
   const walkable = (x, y) => x >= 0 && y >= 0 && x < W && y < H && !solid[y][x];
@@ -196,7 +209,7 @@
   // ---------------------------------------------------------------- state
   const chefs = new Map(); // id -> { data, actor, slot, home, leaving, passUntil, platePending, bubble, sous: Map }
   const waiters = [];
-  const plates = []; // on the pass or tables: { x, y, until, onPass, taken }
+  const plates = []; // plates waiting on the pass: { x, y, until, taken }
   const boss = new Actor('boss', BOSS_HOME.x, BOSS_HOME.y, { face: BOSS_HOME.face, speed: 52 });
   let bossTarget = null;
   let stats = null;
@@ -253,11 +266,14 @@
   }
 
   const isSeated = (d) => d.seat !== null && d.seat !== undefined;
+  const newestPlate = (d) => Math.max(0, ...(d.plates || []).map((p) => p.ts));
+  const visiblePlates = (rec) => (rec.data.plates || []).filter((p) => p.ts <= rec.deliveredTs);
 
   function upsertChef(data) {
     let rec = chefs.get(data.id);
     if (!rec) {
-      rec = { data, actor: null, slot: null, sous: new Map(), spot: null, passUntil: 0, leaving: false, forget: false };
+      // Plates served before this chef appeared are already on the table.
+      rec = { data, actor: null, slot: null, sous: new Map(), spot: null, passUntil: 0, leaving: false, forget: false, deliveredTs: newestPlate(data) };
       chefs.set(data.id, rec);
     }
     rec.data = data;
@@ -341,7 +357,7 @@
 
   // ---------------------------------------------------------------- waiters, plates, boss
   function spawnWaiter(job) {
-    if (waiters.length >= 8) return;
+    if (waiters.length >= 8) return false;
     const w = new Actor('waiter', FRONT_DOOR.x, FRONT_DOOR.y, { face: 'up', speed: 64 });
     w.job = job;
     waiters.push(w);
@@ -364,15 +380,21 @@
         setTimeout(() => {
           plate.taken = true;
           w.carry = 'plate';
-          const table = TABLE_SPOTS[Math.floor(Math.random() * TABLE_SPOTS.length)];
-          w.goTo(table.x, table.y, 'right', () => {
+          const rec = chefs.get(job.chefId);
+          const table = rec && tableFor(rec.data.seat);
+          const deliver = () => {
             w.carry = null;
-            plates.push({ x: table.table.x * T + 4 + Math.floor(Math.random() * 16), y: table.table.y * T + 6 + Math.floor(Math.random() * 10), until: performance.now() + 25000 });
+            if (rec) rec.deliveredTs = newestPlate(rec.data);
+          };
+          if (!table) { deliver(); leave(); return; }
+          w.goTo(table.spot.x, table.spot.y, table.spot.face, () => {
+            deliver();
             setTimeout(leave, 500);
           });
         }, 400);
       });
     }
+    return true;
   }
 
   function nearestWalkableAround(x, y) {
@@ -485,6 +507,8 @@
         rec.passUntil = performance.now() + 6000;
         rec.platePending = true;
         rec.bubble = { text: 'Order up!', until: performance.now() + 3500 };
+      } else if (rec) {
+        rec.deliveredTs = newestPlate(rec.data);
       }
     } else if (fx.fx === 'attention') {
       play('attention');
@@ -624,9 +648,12 @@
   function onChefArrive(rec) {
     if (rec.platePending && rec.spot && rec.spot.work === 'pass') {
       rec.platePending = false;
-      const plate = { x: DIV * T + 4, y: rec.spot.y * T + 4, until: performance.now() + 30000, onPass: true };
+      const plate = { x: DIV * T + 4, y: rec.spot.y * T + 4, until: performance.now() + 30000 };
       plates.push(plate);
-      spawnWaiter({ type: 'plate', plate });
+      if (!spawnWaiter({ type: 'plate', plate, chefId: rec.data.id })) {
+        plate.taken = true;
+        rec.deliveredTs = newestPlate(rec.data);
+      }
     }
   }
 
@@ -770,6 +797,15 @@
     wctx.fillStyle = `rgba(255,170,60,${glow})`;
     wctx.fillRect(DIV * T - 4, 4 * T, T + 8, 8 * T);
     for (const p of plates) drawScaled(S.prop('plate'), p.x, p.y, Math.min(cs, 1.5));
+    // Each seated chef's half table: a place card in the source colour plus its served plates.
+    for (const rec of chefs.values()) {
+      if (rec.forget || !isSeated(rec.data)) continue;
+      const t = tableFor(rec.data.seat);
+      S.rect(wctx, t.px + 3, t.py + 23, 6, 3, '#1b1b24');
+      S.rect(wctx, t.px + 4, t.py + 24, 4, 1, bandOf(rec.data.source));
+      const shown = visiblePlates(rec);
+      for (let i = 0; i < shown.length; i++) wctx.drawImage(S.prop('plate'), t.px + PLATE_OFFSETS[i][0], t.py + PLATE_OFFSETS[i][1]);
+    }
     // Chefs waiting to be seated sit on the bench.
     let n = 0;
     for (const rec of chefs.values()) {
@@ -837,6 +873,39 @@
       ctx.font = `bold ${fs}px ui-monospace, Consolas, monospace`;
       ctx.fillStyle = '#fff';
       ctx.fillText(`+${waitingCount - 3}`, 28.8 * T, 15 * T + 4);
+    }
+
+    // Orders served per table since the kitchen opened; these add up to "Orders served today".
+    ctx.font = `bold ${fs * 0.85}px ui-monospace, Consolas, monospace`;
+    for (const rec of chefs.values()) {
+      if (rec.forget || !isSeated(rec.data) || !rec.data.served) continue;
+      const t = tableFor(rec.data.seat);
+      const label = `\u00d7${rec.data.served}`;
+      const bx = t.px + 7;
+      const by = t.py + 32;
+      const w = ctx.measureText(label).width + fs * 0.6;
+      roundRect(ctx, bx - w / 2, by - fs * 0.55, w, fs * 1.1, fs * 0.3, bandOf(rec.data.source), 'rgba(0,0,0,0.85)');
+      ctx.fillStyle = '#fff';
+      ctx.fillText(label, bx, by);
+    }
+
+    if (hoveredTable) {
+      const [tx, ty] = TABLES[hoveredTable.index];
+      const rec = chefAtTable(hoveredTable.index, hoveredTable.right);
+      const name = `Table ${hoveredTable.index + 1}${hoveredTable.right ? 'B' : 'A'}`;
+      let lines;
+      if (!rec) {
+        lines = [`${name} \u00b7 free`, '\u2022 no chef seated here'];
+      } else {
+        const d = rec.data;
+        const shown = visiblePlates(rec);
+        lines = [
+          `${name} \u00b7 ${d.repo} (${d.source === 'claude' ? 'Claude' : 'Copilot'})`,
+          `${d.served || 0} served since the kitchen opened`,
+          ...(shown.length ? shown.map((p) => `\u2022 ${p.text} (${ago(p.ts)})`) : ['\u2022 nothing on the table yet']),
+        ];
+      }
+      infoBubble(lines, tx * T + 16, ty * T - 2, fs);
     }
 
     if (selectedId) {
@@ -919,10 +988,48 @@
   }
 
   // ---------------------------------------------------------------- input
-  canvas.addEventListener('click', (e) => {
+  let hoveredTable = null;
+
+  function chefAtTable(index, right) {
+    const seat = index + (right ? TABLES.length : 0);
+    for (const rec of chefs.values()) if (!rec.forget && rec.data.seat === seat) return rec;
+    return null;
+  }
+
+  function ago(ts) {
+    const s = Math.max(0, Math.floor((now() - ts) / 1000));
+    if (s < 60) return 'just now';
+    if (s < 3600) return `${Math.floor(s / 60)}m ago`;
+    return `${Math.floor(s / 3600)}h ago`;
+  }
+
+  function worldPoint(e) {
     const r = canvas.getBoundingClientRect();
-    const x = ((e.clientX - r.left) / r.width) * NW;
-    const y = ((e.clientY - r.top) / r.height) * NH;
+    return { x: ((e.clientX - r.left) / r.width) * NW, y: ((e.clientY - r.top) / r.height) * NH };
+  }
+
+  function tableAt(x, y) {
+    for (let i = 0; i < TABLES.length; i++) {
+      const [tx, ty] = TABLES[i];
+      if (x >= tx * T && x < tx * T + 2 * T && y >= ty * T && y < ty * T + 2 * T) return { index: i, right: x >= tx * T + T };
+    }
+    return null;
+  }
+
+  canvas.addEventListener('mousemove', (e) => {
+    const p = worldPoint(e);
+    hoveredTable = tableAt(p.x, p.y);
+  });
+  canvas.addEventListener('mouseleave', () => { hoveredTable = null; });
+
+  canvas.addEventListener('click', (e) => {
+    const { x, y } = worldPoint(e);
+    const table = tableAt(x, y);
+    if (table) {
+      const rec = chefAtTable(table.index, table.right);
+      selectedId = rec ? rec.data.id : null;
+      return;
+    }
     let hit = null;
     let best = Infinity;
     for (const rec of chefs.values()) {

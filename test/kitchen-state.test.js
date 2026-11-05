@@ -94,6 +94,28 @@ test('seats at most 12 chefs, interactive before automated', () => {
   assert.notEqual(k.snapshot().chefs.find((c) => c.id === 'auto0').seat, null, 'waiting chef is promoted');
 });
 
+test('served orders leave plates on the table until the next order', () => {
+  const { k } = make();
+  k.apply(ev({ sessionId: 's1', kind: 'order', text: 'Old order', backfill: true }));
+  k.apply(ev({ sessionId: 's1', kind: 'turn_end', backfill: true }));
+  let chef = k.snapshot().chefs[0];
+  assert.deepEqual(chef.plates.map((p) => p.text), ['Old order']);
+  assert.equal(chef.served, 0, 'backfilled serves are not counted');
+  for (const text of ['a', 'b', 'c']) {
+    k.apply(ev({ sessionId: 's1', kind: 'turn_end' }));
+    k.apply(ev({ sessionId: 's1', kind: 'tool_start', tool: 'Read', toolUseId: `r${text}` }));
+    k.apply(ev({ sessionId: 's1', kind: 'turn_end' }));
+  }
+  chef = k.snapshot().chefs[0];
+  assert.equal(chef.plates.length, 3);
+  assert.equal(chef.served, 3);
+  assert.equal(k.snapshot().stats.servedToday, chef.served);
+  const up = k.flush().find((d) => d.fx === 'order_up');
+  assert.equal(up.text, 'order', 'falls back to "order" when the ticket had no text');
+  k.apply(ev({ sessionId: 's1', kind: 'order', text: 'New order' }));
+  assert.deepEqual(k.snapshot().chefs[0].plates, []);
+});
+
 test('chefs expire after 10 minutes of inactivity', () => {
   const { k, advance } = make();
   k.apply(ev({ sessionId: 's1', kind: 'order', text: 'x' }));

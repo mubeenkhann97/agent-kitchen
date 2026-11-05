@@ -21,11 +21,17 @@ function startKitchen(mode) {
   } else {
     const { ClaudeWatcher } = require('./watchers/claude');
     const { CopilotWatcher } = require('./watchers/copilot');
+    const { VSCodeChatWatcher } = require('./watchers/vscode-chat');
     const cfg = config();
     const watchers = [
       new ClaudeWatcher({ root: cfg.get('claudeProjectsDir') || undefined }),
       new CopilotWatcher({ root: cfg.get('copilotSessionDir') || undefined }),
     ];
+    if (cfg.get('includeVSCodeChat') !== false) {
+      // globalStorageUri is <User>/globalStorage/<extension id>, which also covers Insiders and portable installs.
+      const userDir = path.dirname(path.dirname(context.globalStorageUri.fsPath));
+      watchers.push(new VSCodeChatWatcher({ userDirs: [userDir] }));
+    }
     for (const w of watchers) {
       w.onEvents(ingest);
       w.start();

@@ -1,6 +1,6 @@
 # Agent Kitchen
 
-A live pixel-art restaurant kitchen for your AI coding agents. Every active **Claude Code** and **GitHub Copilot** session is a chef cooking an order. Waiters bring tickets and carry plates, sous-chefs help out, and the head chef walks over when someone needs you.
+A live pixel-art restaurant kitchen for your AI coding agents. Every active **Claude Code** session and **GitHub Copilot** session (Copilot CLI and Copilot Chat in VS Code) is a chef cooking an order. Waiters bring tickets and carry plates, sous-chefs help out, and the head chef walks over when someone needs you.
 
 - Zero npm dependencies: Node built-ins plus plain HTML/CSS/JS with `<canvas>`. No build step.
 - Zero config: it tails the session log files directly. Hooks are optional.
@@ -23,6 +23,7 @@ While the kitchen is open, the status bar shows the number of chefs and anyone w
 | `agentKitchen.notifyOnAttention` | `true` | Notify when a chef needs you and the kitchen tab isn't visible. |
 | `agentKitchen.claudeProjectsDir` | `~/.claude/projects` | Override the Claude transcripts folder. |
 | `agentKitchen.copilotSessionDir` | `~/.copilot/session-state` | Override the Copilot session folder. |
+| `agentKitchen.includeVSCodeChat` | `true` | Show Copilot Chat sessions from this VS Code (Chat view, agent mode). |
 
 The extension opens no network port; the kitchen talks to the webview over VS Code's message channel under a strict Content Security Policy.
 
@@ -43,9 +44,10 @@ Open <http://127.0.0.1:4777>. Use `--port=5000` (or `AGENT_KITCHEN_PORT`) to cha
 ## How it works
 
 ```
-watchers/claude.js  ─┐
-watchers/copilot.js ─┼─► normalize.js ─► kitchen-state.js ─┬─► SSE /stream ─► public/  (server.js, npm start)
-POST /event (hooks) ─┘                                     └─► postMessage ─► webview  (extension.js)
+watchers/claude.js      ─┐
+watchers/copilot.js     ─┤
+watchers/vscode-chat.js ─┼─► normalize.js ─► kitchen-state.js ─┬─► SSE /stream ─► public/  (server.js, npm start)
+POST /event (hooks)     ─┘                                     └─► postMessage ─► webview  (extension.js)
 ```
 
 | File | Role |
@@ -53,6 +55,7 @@ POST /event (hooks) ─┘                                     └─► postMes
 | `tail-reader.js` | Byte-offset JSONL tailer. Starts 256 KB from the end of active files (only new bytes for older ones), keeps a partial-line buffer, survives split UTF-8, truncation and file replacement, caps reads per poll and drops oversized lines. Opens files read-only for each poll and closes them straight away. |
 | `watchers/claude.js` | Polls `~/.claude/projects/<encoded-cwd>/<sessionId>.jsonl` and `<sessionId>/subagents/agent-*.jsonl` once a second with `fs.stat` (no reliance on `fs.watch`). Directory listings are refreshed only when a folder's mtime changes. Subagent `.meta.json` links a sous-chef to the `Task` call that launched it. |
 | `watchers/copilot.js` | Polls `~/.copilot/session-state/<id>/events.jsonl`, reads `workspace.yaml` (cwd, name) and `inuse.<pid>.lock` (a vanished lock or dead PID ends the session). |
+| `watchers/vscode-chat.js` | Polls VS Code Copilot Chat sessions in `<VS Code user dir>/workspaceStorage/<id>/chatSessions/*.jsonl` (and `globalStorage/emptyWindowChatSessions`), taking the repo from the workspace's `workspace.json`. The format is a snapshot plus property-set and array-push operations; tool parts are de-duplicated by `toolCallId`. Active chats are checked every second, idle ones every 5 s, so a brand-new chat can take up to ~5 s to appear. Covers VS Code Stable and Insiders. |
 | `normalize.js` | Turns every source into `{source, sessionId, parentId?, kind, tool?, station?, text?, cwd, model?, ts}` with `kind` ∈ `session_start, order, tool_start, tool_end, turn_end, needs_attention, subagent_start, subagent_end, session_end`. Optional extras: `title`, `toolUseId`, `backfill`. |
 | `kitchen-state.js` | Authoritative state: chefs, tickets, sous-chefs, stats. Deduplicates hook + transcript events, seats up to 12 chefs (interactive before automated), expires chefs after 10 min idle, and emits a snapshot on connect, then batched deltas every 100 ms. |
 | `server.js` | HTTP server for `npm start`: static files, `GET /stream` (SSE), `POST /event` (hooks). |
@@ -74,7 +77,7 @@ POST /event (hooks) ─┘                                     └─► postMes
 |---|---|
 | Chef (hat band orange = Claude, purple = Copilot) | A top-level session. Walks to the station for its current tool. |
 | Sous-chef (smaller) | A subagent (Claude `Task`/`Agent`, Copilot `task`). |
-| Waiter | Brings a ticket on a new prompt; carries the plate from the pass to a table on order-up. |
+| Waiter | Brings a ticket on a new prompt; carries the plate from the pass to the chef's own table on order-up. |
 | Head chef | Stands at the pass; walks to any chef that needs attention. |
 
 | Station | Tools |
@@ -90,6 +93,7 @@ POST /event (hooks) ─┘                                     └─► postMes
 ## UI
 
 - Ticket rail: one ticket per open order with source, repo, prompt (≤ 80 chars) and elapsed time. Amber after 2 min, red after 5. Click a ticket to select its chef.
+- Dining room: each seated chef owns half a table (place card in its source colour). Served orders stay on that table (up to 3 plates) until the chef gets its next order; the ×N badge counts orders served since the kitchen opened, and these add up to "Orders served today". Hover a table to see who sits there and what was served; click it to select the chef.
 - Click a chef to see its last five actions as kitchen lines ("chopping animate.py", "firing up `npm test`"). `Esc` closes the bubble.
 - Sounds (order-up bell, attention chime) are generated with WebAudio. The mute toggle is off by default; browsers only start audio after your first click or key press.
 - **Customise** (header button) changes the look, saved in your browser's localStorage:
@@ -125,7 +129,7 @@ Add this to `~/.claude/settings.json` yourself (Agent Kitchen never edits it), a
 
 - Reads only; files are opened with the `r` flag and closed after each poll. Nothing is written under `~/.claude` or `~/.copilot`.
 - Server listens on `127.0.0.1` only, rejects foreign `Host` headers (DNS rebinding) and cross-site `Origin`s on `POST /event`, and sends a strict CSP.
-- The UI shows prompt text truncated to about 80 characters, file base names, commands truncated to 40 characters and URL host names. Tool results, file contents, assistant text, thinking text and Copilot `transformedContent` are never read into events.
+- The UI shows prompt text truncated to about 80 characters, file base names, commands truncated to 40 characters and URL host names. Tool results, file contents, assistant text, thinking text, Copilot `transformedContent` and VS Code terminal output are never read into events.
 - All text is rendered with `textContent` or canvas text, never as HTML.
 
 ## Add a new tool → station mapping

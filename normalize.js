@@ -1,5 +1,5 @@
 'use strict';
-const { stationFor, isSubagentTool, isAttentionTool, summarize, describeAction, clean } = require('./stations');
+const { stationFor, isSubagentTool, isAttentionTool, summarize, describeAction, clean, vscodeToolAlias } = require('./stations');
 
 const PROMPT_MAX = 80;
 
@@ -223,6 +223,152 @@ function normalizeCopilot(obj, ctx = {}) {
   }
 }
 
+// Only a file path, a terminal command line or a subagent description is ever taken from a VS Code tool part.
+function vscodeToolInput(part) {
+  const tsd = part.toolSpecificData && typeof part.toolSpecificData === 'object' ? part.toolSpecificData : {};
+  if (tsd.commandLine && typeof tsd.commandLine === 'object') return { command: tsd.commandLine.forDisplay || tsd.commandLine.original };
+  if (typeof tsd.description === 'string') return { description: tsd.description };
+  const msg = part.invocationMessage;
+  const uris = msg && typeof msg === 'object' && msg.uris && typeof msg.uris === 'object' ? Object.values(msg.uris) : [];
+  const first = uris.find((u) => u && typeof u.path === 'string');
+  if (first) {
+    try { return { path: decodeURIComponent(first.path) }; } catch { return { path: first.path }; }
+  }
+  return {};
+}
+
+// VS Code ResponseModelState: 0 pending, 1 complete, 2 cancelled, 3 failed, 4 needs input.
+const VS_COMPLETE = 1;
+const VS_CANCELLED = new Set([2, 3]);
+const VS_NEEDS_INPUT = 4;
+
+/**
+ * VS Code Copilot Chat session line -> events. Lines are a snapshot (kind 0), a property set (kind 1)
+ * or an array push/splice (kind 2) addressed by the path in `k`.
+ * ctx: { sessionId, cwd?, state: {} } - state is per-session and mutated here.
+ */
+function normalizeVSCodeChat(obj, ctx = {}) {
+  if (!obj || typeof obj !== 'object' || typeof obj.kind !== 'number' || !ctx.sessionId) return [];
+  const st = ctx.state || (ctx.state = {});
+  st.tools = st.tools || new Map(); // toolCallId -> completed?
+  st.requests = st.requests || new Set();
+  st.finished = st.finished || new Set();
+  st.notes = st.notes || new Set();
+  if (st.count === undefined) st.count = 0;
+  const sessionId = ctx.sessionId;
+  const now = Date.now();
+  const out = [];
+  const ev = (kind, extra, ts) => base('copilot', sessionId, kind, extra || {}, ts || now, ctx.cwd);
+  const key = Array.isArray(obj.k) ? obj.k : [];
+
+  const remember = (set, value) => {
+    set.add(value);
+    if (set.size > 5000) set.delete(set.values().next().value);
+  };
+
+  const onState = (index, ms) => {
+    if (!ms || typeof ms !== 'object') return;
+    if (ms.value === VS_NEEDS_INPUT) {
+      out.push(ev('needs_attention', { text: 'is waiting for your input' }));
+    } else if ((ms.value === VS_COMPLETE || VS_CANCELLED.has(ms.value)) && !st.finished.has(index)) {
+      remember(st.finished, index);
+      const extra = { model: st.model };
+      if (ms.value !== VS_COMPLETE) extra.text = 'cancelled';
+      out.push(ev('turn_end', extra, typeof ms.completedAt === 'number' ? ms.completedAt : now));
+    }
+  };
+
+  const onParts = (parts) => {
+    for (const part of parts) {
+      if (!part || typeof part !== 'object') continue;
+      if (part.kind === 'questionCarousel' || part.kind === 'confirmation') {
+        const title = part.title && typeof part.title === 'object' ? part.title.value : part.title;
+        const note = `${part.kind}:${part.resolveId || clean(title, 60)}`;
+        if (!st.notes.has(note)) {
+          remember(st.notes, note);
+          out.push(ev('needs_attention', { text: part.kind === 'confirmation' ? 'needs your confirmation' : 'has a question for you' }));
+        }
+        continue;
+      }
+      if (part.kind !== 'toolInvocationSerialized' || typeof part.toolCallId !== 'string') continue;
+      const id = part.toolCallId;
+      const done = !!part.isComplete;
+      const known = st.tools.get(id);
+      if (known === true || (known === false && !done)) continue;
+      const tool = vscodeToolAlias(part.toolId);
+      const sous = typeof part.subAgentInvocationId === 'string' && part.subAgentInvocationId !== id ? part.subAgentInvocationId : null;
+      if (known === undefined) {
+        const input = vscodeToolInput(part);
+        if (sous) {
+          out.push(toolStart('copilot', sous, tool, id, input, now, ctx.cwd, sessionId));
+        } else {
+          out.push(toolStart('copilot', sessionId, tool, id, input, now, ctx.cwd));
+          if (isSubagentTool(tool)) {
+            out.push(base('copilot', id, 'subagent_start', { parentId: sessionId, text: summarize(tool, input) || 'sous-chef' }, now, ctx.cwd));
+          }
+          if (isAttentionTool(tool) && !done) out.push(ev('needs_attention', { text: 'has a question for you' }));
+        }
+      }
+      st.tools.set(id, done);
+      if (st.tools.size > 5000) st.tools.delete(st.tools.keys().next().value);
+      if (done) {
+        out.push(sous
+          ? base('copilot', sous, 'tool_end', { parentId: sessionId, toolUseId: id }, now, ctx.cwd)
+          : ev('tool_end', { toolUseId: id }));
+      }
+    }
+  };
+
+  const onRequest = (req, index) => {
+    if (!req || typeof req !== 'object') return;
+    if (typeof req.modelId === 'string') {
+      const model = req.modelId.replace(/^copilot\//, '');
+      if (model !== st.model) {
+        st.model = model;
+        out.push(ev('session_start', { model }));
+      }
+    }
+    const reqId = req.requestId || `#${index}`;
+    if (!st.requests.has(reqId)) {
+      remember(st.requests, reqId);
+      const text = !req.hiddenFromTranscript && req.message && promptText(req.message.text);
+      if (text) out.push(ev('order', { text }, typeof req.timestamp === 'number' ? req.timestamp : now));
+    }
+    if (Array.isArray(req.response)) onParts(req.response);
+    onState(index, req.modelState);
+  };
+
+  if (obj.kind === 0) {
+    const v = obj.v && typeof obj.v === 'object' ? obj.v : {};
+    if (typeof v.customTitle === 'string') out.push(ev('session_start', { title: clean(v.customTitle, 60) }));
+    const reqs = Array.isArray(v.requests) ? v.requests : [];
+    reqs.forEach((r, i) => onRequest(r, i));
+    st.count = reqs.length;
+  } else if (obj.kind === 1) {
+    if (key.length === 1 && key[0] === 'customTitle' && typeof obj.v === 'string') {
+      out.push(ev('session_start', { title: clean(obj.v, 60) }));
+    } else if (key.length === 2 && key[0] === 'inputState' && key[1] === 'selectedModel') {
+      const id = obj.v && typeof obj.v.identifier === 'string' ? obj.v.identifier.replace(/^copilot\//, '') : null;
+      if (id && id !== st.model) {
+        st.model = id;
+        out.push(ev('session_start', { model: id }));
+      }
+    } else if (key.length === 3 && key[0] === 'requests' && key[2] === 'modelState') {
+      onState(key[1], obj.v);
+    }
+  } else if (obj.kind === 2) {
+    const items = Array.isArray(obj.v) ? obj.v : [obj.v];
+    if (key.length === 1 && key[0] === 'requests') {
+      const start = Number.isInteger(obj.i) ? obj.i : st.count;
+      items.forEach((r, j) => onRequest(r, start + j));
+      st.count = start + items.length;
+    } else if (key.length === 3 && key[0] === 'requests' && key[2] === 'response') {
+      onParts(items);
+    }
+  }
+  return out;
+}
+
 /** Claude Code hook payload -> events. */
 function normalizeHook(obj) {
   if (!obj || typeof obj !== 'object') return [];
@@ -254,4 +400,4 @@ function normalizeHook(obj) {
   }
 }
 
-module.exports = { normalizeClaude, normalizeCopilot, normalizeHook, promptText, PROMPT_MAX };
+module.exports = { normalizeClaude, normalizeCopilot, normalizeVSCodeChat, normalizeHook, promptText, PROMPT_MAX };

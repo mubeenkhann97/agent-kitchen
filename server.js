@@ -41,7 +41,8 @@ function createServer(opts = {}) {
   } else if (opts.watch !== false) {
     const { ClaudeWatcher } = require('./watchers/claude');
     const { CopilotWatcher } = require('./watchers/copilot');
-    for (const w of [new ClaudeWatcher(), new CopilotWatcher()]) {
+    const { VSCodeChatWatcher } = require('./watchers/vscode-chat');
+    for (const w of [new ClaudeWatcher(), new CopilotWatcher(), new VSCodeChatWatcher()]) {
       w.onEvents(ingest);
       w.start();
       stops.push(() => w.stop());

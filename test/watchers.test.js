@@ -6,6 +6,7 @@ const os = require('os');
 const path = require('path');
 const { ClaudeWatcher, rootCwd } = require('../watchers/claude');
 const { CopilotWatcher, parseWorkspaceYaml } = require('../watchers/copilot');
+const { VSCodeChatWatcher, workspaceFolder } = require('../watchers/vscode-chat');
 
 const dirs = [];
 test.after(() => { for (const d of dirs) fs.rmSync(d, { recursive: true, force: true }); });
@@ -78,6 +79,34 @@ test('Copilot watcher reads events and workspace.yaml', async () => {
   assert.equal(meta.cwd, 'C:\\Dev\\Pipeline');
   assert.equal(meta.title, 'Fix pipeline');
   assert.ok(evs.some((e) => e.kind === 'order' && e.text === 'Fix it'));
+});
+
+test('VS Code chat watcher reads chat sessions with the workspace folder as cwd', async () => {
+  const user = tmp();
+  const ws = path.join(user, 'workspaceStorage', 'abc123');
+  fs.mkdirSync(path.join(ws, 'chatSessions'), { recursive: true });
+  const folder = process.platform === 'win32' ? 'file:///c%3A/Dev/My%20Shop' : 'file:///home/me/My%20Shop';
+  fs.writeFileSync(path.join(ws, 'workspace.json'), JSON.stringify({ folder }));
+  const file = path.join(ws, 'chatSessions', 'chat-1.jsonl');
+  fs.writeFileSync(file, JSON.stringify({ kind: 0, v: { sessionId: 'chat-1', requests: [] } }) + '\n');
+  const w = new VSCodeChatWatcher({ userDirs: [user] });
+  const evs = collect(w);
+  await w.tick();
+  fs.appendFileSync(file, JSON.stringify({ kind: 2, k: ['requests'], v: [{ requestId: 'r1', message: { text: 'Hello chef' }, response: [] }] }) + '\n');
+  fs.appendFileSync(file, JSON.stringify({ kind: 1, k: ['requests', 0, 'result'], v: { metadata: { secret: 'x' } } }) + '\n');
+  await w.tick();
+  const order = evs.find((e) => e.kind === 'order');
+  assert.ok(order && !order.backfill);
+  assert.equal(order.sessionId, 'chat-1');
+  assert.equal(order.cwd, process.platform === 'win32' ? 'c:\\Dev\\My Shop' : '/home/me/My Shop');
+});
+
+test('workspaceFolder handles folders, .code-workspace files and non-file URIs', () => {
+  if (process.platform === 'win32') {
+    assert.equal(workspaceFolder({ workspace: 'file:///c%3A/Dev/proj/team.code-workspace' }), 'c:\\Dev\\proj');
+  }
+  assert.equal(workspaceFolder({ folder: 'vscode-remote://ssh-remote+box/home/x' }), undefined);
+  assert.equal(workspaceFolder({}), undefined);
 });
 
 test('parseWorkspaceYaml handles quotes and skips block scalars', () => {

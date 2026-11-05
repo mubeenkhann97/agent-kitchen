@@ -15,10 +15,12 @@ async function readdirSafe(p) {
 
 // Polls tracked files (never fs.watch alone) and emits normalized events.
 class SessionWatcher {
-  constructor({ root, intervalMs = 1000, now = Date.now } = {}) {
+  constructor({ root, intervalMs = 1000, now = Date.now, coldEvery = 1 } = {}) {
     this.root = root;
     this.intervalMs = intervalMs;
     this.now = now;
+    // Files idle for longer than ACTIVE_MS are only checked every `coldEvery` ticks.
+    this.coldEvery = coldEvery;
     this.files = new Map();
     this.listeners = new Set();
     this.timer = null;
@@ -50,6 +52,7 @@ class SessionWatcher {
   async pollFiles() {
     const now = this.now();
     for (const [file, entry] of this.files) {
+      if (this.coldEvery > 1 && this.ticks % this.coldEvery !== 0 && now - (entry.reader.mtimeMs || 0) > ACTIVE_MS) continue;
       let res;
       try {
         res = await entry.reader.poll();

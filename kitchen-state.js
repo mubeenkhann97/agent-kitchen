@@ -8,6 +8,7 @@ const ATTENTION_GRACE_MS = 60 * 60 * 1000;
 const ACTION_LIMIT = 5;
 const SOUS_LIMIT = 8;
 const DEDUPE_MS = 10 * 1000;
+const PLATE_LIMIT = 3;
 
 function dayKey(ts) {
   const d = new Date(ts);
@@ -79,6 +80,7 @@ class KitchenState {
         chef.ticket = { text: ev.text || '', since: ev.ts };
         chef.status = 'cooking';
         chef.attention = null;
+        chef.plates = [];
         inner.pending.clear();
         this.pushAction(chef, `new ticket: "${ev.text || ''}"`, ev.ts);
         if (live) this.addFx('order', chef.id, { text: ev.text });
@@ -121,15 +123,18 @@ class KitchenState {
           break;
         }
         if (!chef.ticket && chef.status === 'idle') break;
+        const dish = (chef.ticket && chef.ticket.text) || chef.title || 'order';
+        chef.plates.push({ text: dish, ts: ev.ts });
+        if (chef.plates.length > PLATE_LIMIT) chef.plates.shift();
         chef.ticket = null;
         chef.status = 'idle';
         chef.station = 'pass';
         chef.tool = null;
-        chef.served++;
         if (live) {
+          chef.served++;
           this.stats.servedToday++;
           this.statsDirty = true;
-          this.addFx('order_up', chef.id);
+          this.addFx('order_up', chef.id, { text: dish });
         }
         this.pushAction(chef, 'Order up!', ev.ts, 'pass');
         break;
@@ -234,7 +239,7 @@ class KitchenState {
     const chef = {
       id: ev.sessionId, source: ev.source, cwd: null, repo: 'unknown', model: null, title: null, titleWeak: true,
       client: null, automated: false, status: 'idle', attention: null, station: 'prep', tool: null,
-      ticket: null, actions: [], sous: [], toolCount: 0, served: 0, seat: null,
+      ticket: null, plates: [], actions: [], sous: [], toolCount: 0, served: 0, seat: null,
       createdAt: ev.ts, lastActivity: ev.ts,
     };
     const m = this.meta.get(ev.sessionId);
@@ -372,7 +377,7 @@ function publicChef(c) {
   return {
     id: c.id, source: c.source, repo: c.repo, model: c.model, title: c.title, client: c.client,
     automated: c.automated, status: c.status, attention: c.attention, station: c.station, tool: c.tool,
-    ticket: c.ticket ? { ...c.ticket } : null, actions: c.actions.map((a) => ({ ...a })),
+    ticket: c.ticket ? { ...c.ticket } : null, plates: c.plates.map((p) => ({ ...p })), actions: c.actions.map((a) => ({ ...a })),
     sous: c.sous.map((s) => ({ ...s })), toolCount: c.toolCount, served: c.served, seat: c.seat,
     lastActivity: c.lastActivity,
   };
