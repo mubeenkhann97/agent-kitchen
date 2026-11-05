@@ -35,14 +35,25 @@ jobs:
         run: npx --yes @vscode/vsce package --out agent-kitchen.vsix
 
       - name: Publish to VS Code Marketplace
-        run: npx --yes @vscode/vsce publish --oidc --packagePath agent-kitchen.vsix
+        run: npx --yes @vscode/vsce publish --oidc --packagePath agent-kitchen.vsix --skip-duplicate
 
       - name: Publish to Open VSX (optional)
         if: env.OVSX_PAT != ''
-        run: npx --yes ovsx publish agent-kitchen.vsix -p "$OVSX_PAT"
+        run: npx --yes ovsx publish agent-kitchen.vsix -p "$OVSX_PAT" --skip-duplicate
 
+      # Retries transient GitHub API errors; uploads to an existing release so re-runs succeed.
       - name: GitHub release with the .vsix
         if: startsWith(github.ref, 'refs/tags/v')
         env:
           GH_TOKEN: ${{ github.token }}
-        run: gh release create "${GITHUB_REF_NAME}" agent-kitchen.vsix --title "${GITHUB_REF_NAME}" --generate-notes
+        run: |
+          for attempt in 1 2 3 4 5; do
+            if gh release view "${GITHUB_REF_NAME}" >/dev/null 2>&1; then
+              gh release upload "${GITHUB_REF_NAME}" agent-kitchen.vsix --clobber && exit 0
+            else
+              gh release create "${GITHUB_REF_NAME}" agent-kitchen.vsix --title "${GITHUB_REF_NAME}" --generate-notes && exit 0
+            fi
+            echo "GitHub API failed (attempt ${attempt}), retrying in $((attempt * 15))s..."
+            sleep $((attempt * 15))
+          done
+          exit 1

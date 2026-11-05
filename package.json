@@ -2,7 +2,7 @@
   "name": "agent-kitchen",
   "displayName": "Agent Kitchen",
   "description": "A live pixel-art restaurant kitchen where your Claude Code and GitHub Copilot sessions are chefs cooking orders.",
-  "version": "1.0.2",
+  "version": "1.0.3",
   "publisher": "BeenTech",
   "license": "MIT",
   "private": true,
