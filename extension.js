@@ -106,9 +106,16 @@ function openPanel(mode) {
 
 function updateStatus() {
   if (!statusItem) return;
+  if (!config().get('showStatusBar')) {
+    statusItem.hide();
+    return;
+  }
   const kitchen = kitchens.get('live');
   if (!kitchen) {
-    statusItem.hide();
+    statusItem.text = '$(flame) Kitchen';
+    statusItem.tooltip = 'Agent Kitchen: open the kitchen';
+    statusItem.backgroundColor = undefined;
+    statusItem.show();
     return;
   }
   const chefs = [...kitchen.state.chefs.values()];
@@ -151,6 +158,13 @@ function activate(ctx) {
     const kitchen = kitchens.get('live') || startKitchen('live');
     kitchen.keepAlive = true;
   }
+  updateStatus();
+  ctx.subscriptions.push(vscode.workspace.onDidChangeConfiguration((e) => {
+    if (e.affectsConfiguration('agentKitchen.showStatusBar')) updateStatus();
+  }));
+  // Set by .vscode/launch.json so F5 opens the kitchen straight away.
+  const autoOpen = process.env.AGENT_KITCHEN_OPEN_ON_START;
+  if (autoOpen) openPanel(autoOpen === 'demo' ? 'demo' : 'live');
 }
 
 function deactivate() {

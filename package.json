@@ -2,7 +2,7 @@
   "name": "agent-kitchen",
   "displayName": "Agent Kitchen",
   "description": "A live pixel-art restaurant kitchen where your Claude Code and GitHub Copilot sessions are chefs cooking orders.",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "publisher": "BeenTech",
   "license": "MIT",
   "private": true,
@@ -58,6 +58,11 @@
     "configuration": {
       "title": "Agent Kitchen",
       "properties": {
+        "agentKitchen.showStatusBar": {
+          "type": "boolean",
+          "default": true,
+          "description": "Show the Agent Kitchen button (chef count and who needs you) in the status bar."
+        },
         "agentKitchen.startOnLaunch": {
           "type": "boolean",
           "default": false,
